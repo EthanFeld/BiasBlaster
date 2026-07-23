@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "biasblaster"
+version = "0.1.0"
+description = "Circuit-bias-driven pulse optimization primitives"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.optional-dependencies]
+# The core package remains NumPy/SciPy-only. These packages are needed only
+# when adapting an external circuit corpus for the standalone benchmark.
+benchmark = ["qiskit>=1.0", "mqt.bench>=1.0"]
+
+[tool.setuptools.packages.find]
+include = ["biasblaster*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
