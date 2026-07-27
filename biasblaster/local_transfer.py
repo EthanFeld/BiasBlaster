@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from functools import lru_cache
 from typing import Mapping
 
 import numpy as np
@@ -17,11 +16,6 @@ from .pauli import (
 )
 
 
-@lru_cache(maxsize=512)
-def _local_matrices(arity: int) -> tuple[np.ndarray, ...]:
-    return tuple(pauli_matrix(label) for label in pauli_labels(arity))
-
-
 def local_pauli_transfer(operation: CircuitOperation) -> np.ndarray:
     """Return the real Pauli transfer matrix for one local operation.
 
@@ -33,7 +27,11 @@ def local_pauli_transfer(operation: CircuitOperation) -> np.ndarray:
     if arity not in (1, 2):
         raise ValueError("local Pauli transfer supports only one- and two-qubit operations")
     labels = pauli_labels(arity)
-    matrices = _local_matrices(arity)
+    # CircuitOperation stores matrices in Qiskit's qarg convention: the first
+    # qarg is the least-significant local tensor factor.  Pauli strings passed
+    # through embed/extract_pauli_label instead follow qarg order, so reverse
+    # them before using the big-endian matrix representation.
+    matrices = tuple(pauli_matrix(label[::-1]) for label in labels)
     dimension = 2**arity
     transfer = np.empty((len(labels), len(labels)), dtype=float)
     for source, pauli in enumerate(matrices):

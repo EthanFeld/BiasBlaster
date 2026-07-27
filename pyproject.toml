@@ -13,6 +13,7 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 # The core package remains NumPy/SciPy-only. These packages are needed only
 # when adapting an external circuit corpus for the standalone benchmark.
 benchmark = ["qiskit>=1.0", "mqt.bench>=1.0"]
+fpga = ["pyserial>=3.5"]
 
 [tool.setuptools.packages.find]
 include = ["biasblaster*"]

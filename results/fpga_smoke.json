@@ -1,0 +1,33 @@
+{
+  "corpus": "synthetic",
+  "fidelity_probe_count": 1,
+  "optimization_backend": "fpga-greedy",
+  "fpga_port": "COM6",
+  "records": [
+    {
+      "benchmark": "synthetic-0",
+      "seed": 7,
+      "width": 1,
+      "fixture_index": 0,
+      "error_model": "iid-coherent",
+      "estimator": "nearest-clifford",
+      "support_cap": null,
+      "gates": 4.0,
+      "support": 3.0,
+      "bound": null,
+      "before_fidelity": 0.9999915737808945,
+      "after_fidelity": 0.999993753576916,
+      "transport_cold_build_ms": 4.952899995259941,
+      "optimization_ms": 232.37430001609027,
+      "payload_bytes": 492.0,
+      "controls": 3.0,
+      "projection_residual": 0.0,
+      "analytic_coordinate_model_ms": 197.8867999278009,
+      "baseline_rescore_ms": 1.2487999629229307,
+      "post_update_rescore_ms": 2.786100027151406,
+      "fidelity_gain": 2.1797960214620105e-06,
+      "nearest_mean_local_process_fidelity": 0.9867041813122124,
+      "nearest_min_local_process_fidelity": 0.9667718810881321
+    }
+  ]
+}

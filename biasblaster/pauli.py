@@ -34,6 +34,9 @@ def pauli_matrix(label: str) -> np.ndarray:
     result = np.array([[1]], dtype=complex)
     for character in label:
         result = np.kron(result, _SINGLE[character])
+    # This value is cached and used as an algebraic constant throughout the
+    # package.  Do not let one caller corrupt later transport calculations.
+    result.setflags(write=False)
     return result
 
 
@@ -63,11 +66,13 @@ def extract_pauli_label(global_label: str, qubits: tuple[int, ...]) -> str:
     return "".join(global_label[n_qubits - 1 - qubit] for qubit in qubits)
 
 
-def local_generator_labels(arity: int) -> tuple[str, str, str]:
+def local_generator_labels(arity: int, *, full_two_qubit: bool = False) -> tuple[str, ...]:
     """Return the three supported local coherent-generator modes."""
 
     if arity == 1:
         return ("X", "Y", "Z")
     if arity == 2:
+        if full_two_qubit:
+            return pauli_labels(2)[1:]
         return ("XX", "YY", "ZZ")
     raise ValueError("only one- and two-qubit local generators are supported")

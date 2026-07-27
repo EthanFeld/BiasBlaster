@@ -26,6 +26,21 @@ class CircuitOperation:
             raise ValueError("unitary dimension does not match operation arity")
         if not np.all(np.isfinite(unitary)):
             raise ValueError("unitary must be finite")
+        if not np.allclose(
+            unitary.conj().T @ unitary,
+            np.eye(dimension, dtype=complex),
+            atol=1e-9,
+            rtol=0.0,
+        ):
+            raise ValueError("unitary must be unitary")
+        angle = float(self.angle)
+        if not np.isfinite(angle):
+            raise ValueError("angle must be finite")
+        # A frozen dataclass does not freeze ndarray contents.  Keep the
+        # validated unitary immutable so later in-place mutation cannot
+        # invalidate a CircuitOperation.
+        unitary = unitary.copy()
+        unitary.setflags(write=False)
         object.__setattr__(self, "qubits", qubits)
-        object.__setattr__(self, "unitary", unitary.copy())
-        object.__setattr__(self, "angle", float(self.angle))
+        object.__setattr__(self, "unitary", unitary)
+        object.__setattr__(self, "angle", angle)
