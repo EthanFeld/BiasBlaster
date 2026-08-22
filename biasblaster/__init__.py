@@ -76,6 +76,15 @@ from .qkrylov_experiment import (
     zero_state_pauli_moments,
 )
 from .qkrylov_adaptive import run_tfim_qkrylov_adaptive_benchmark
+from .quantinuum_nexus import (
+    NexusExecutionConfig,
+    counts_to_pm1_expectation,
+    estimator_to_pytket,
+    estimator_to_qiskit,
+    execute_nexus_estimators,
+    plan_to_pytket,
+    upload_compile_plan,
+)
 from .pauli import (
     embed_pauli_label,
     extract_pauli_label,
@@ -207,4 +216,11 @@ __all__ = [
     "sample_pm1_expectations",
     "run_tfim_qkrylov_benchmark",
     "run_tfim_qkrylov_adaptive_benchmark",
+    "NexusExecutionConfig",
+    "estimator_to_qiskit",
+    "estimator_to_pytket",
+    "plan_to_pytket",
+    "upload_compile_plan",
+    "execute_nexus_estimators",
+    "counts_to_pm1_expectation",
 ]
