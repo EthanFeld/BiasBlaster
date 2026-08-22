@@ -9,6 +9,49 @@ import numpy as np
 from .channel import ObservableImpactBatch
 
 
+def collapse_shared_modes(batch: ObservableImpactBatch) -> ObservableImpactBatch:
+    """Sum repeated occurrence columns that share one calibrated parameter.
+
+    A hardware calibration parameter can affect many gates in one circuit. The
+    local propagation engine naturally produces one Jacobian column per
+    occurrence, but multi-circuit composition needs one column per underlying
+    calibrated parameter. Repeated names are therefore summed while requiring a
+    consistent calibrated mean. Covariance must be attached after this collapse.
+    """
+
+    if batch.covariance is not None or batch.mode_covariance is not None:
+        raise ValueError("collapse raw sensitivity batches before applying covariance")
+    ordered: list[str] = []
+    means: dict[str, float] = {}
+    for index, name in enumerate(batch.mode_names):
+        mean = float(batch.mode_means[index])
+        if name not in means:
+            ordered.append(name)
+            means[name] = mean
+        elif not np.isclose(means[name], mean, atol=1e-12, rtol=0.0):
+            raise ValueError(f"inconsistent repeated mean for {name}")
+
+    jacobian = np.zeros((len(batch.names), len(ordered)), dtype=float)
+    index_by_name = {name: index for index, name in enumerate(ordered)}
+    for column, name in enumerate(batch.mode_names):
+        jacobian[:, index_by_name[name]] += batch.jacobian[:, column]
+    mode_means = np.asarray([means[name] for name in ordered], dtype=float)
+    bias = jacobian @ mode_means
+    return ObservableImpactBatch(
+        names=batch.names,
+        ideal=batch.ideal.copy(),
+        bias=bias,
+        predicted=batch.ideal + bias,
+        jacobian=jacobian,
+        mode_names=tuple(ordered),
+        mode_means=mode_means,
+        covariance=None,
+        mode_covariance=None,
+        forward_dropped_l2=batch.forward_dropped_l2,
+        backward_dropped_l2=batch.backward_dropped_l2.copy(),
+    )
+
+
 def combine_observable_impacts(
     batches: Sequence[ObservableImpactBatch],
     *,
@@ -41,7 +84,9 @@ def combine_observable_impacts(
         if len(set(batch.names)) != len(batch.names):
             raise ValueError("observable names must be unique within each batch")
         if len(set(batch.mode_names)) != len(batch.mode_names):
-            raise ValueError("mode names must be unique within each batch")
+            raise ValueError(
+                "mode names must be unique within each batch; call collapse_shared_modes first"
+            )
         for name in batch.names:
             if name in observable_names:
                 raise ValueError(f"duplicate observable name across batches: {name}")
