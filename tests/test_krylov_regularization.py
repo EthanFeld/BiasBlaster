@@ -50,3 +50,27 @@ def test_modewise_solver_discards_only_uncertain_overlap_direction():
     assert result.retained_overlap_rank == 1
     assert np.count_nonzero(assessment.keep) == 1
     assert np.isclose(result.energy, 0.3)
+
+
+def test_condition_guard_rejects_precise_but_amplifying_overlap_direction():
+    # The 0.02 direction is statistically precise, but whitening it would
+    # amplify projected-matrix noise by ~50x relative to the dominant mode.
+    overlap = np.diag([1.0, 0.02])
+    hamiltonian = np.diag([0.4, -0.2])
+    model = _model(np.diag([1e-8, 1e-8]))
+    assessment = assess_overlap_modes(
+        overlap,
+        model,
+        safety_factor=1.0,
+        max_condition_number=25.0,
+    )
+    assert np.isclose(assessment.conditioning_floor, 0.04)
+    assert assessment.keep.tolist() == [False, True]
+    result, _ = solve_noise_aware_krylov(
+        hamiltonian,
+        overlap,
+        model,
+        max_condition_number=25.0,
+    )
+    assert result.retained_overlap_rank == 1
+    assert np.isclose(result.energy, 0.4)
