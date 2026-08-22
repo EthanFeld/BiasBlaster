@@ -185,21 +185,22 @@ def run_tfim_qkrylov_adaptive_benchmark(
     adaptive_overlap_weight: float = 0.50,
     adaptive_max_weight_ratio: float = 4.0,
     adaptive_min_overlap_snr: float = 4.0,
-    max_condition_number: float | None = 25.0,
+    max_condition_number: float | None = None,
     seed: int = 7,
     noise: EffectiveNoiseParameters | None = None,
     calibration_relative_sigma: float = 0.10,
     overlap_safety_factor: float = 1.0,
     support_cap: int | None = None,
 ) -> KrylovBenchmarkResult:
-    """Run a fixed-budget, condition-aware adaptive QK ablation.
+    """Run a fixed-budget, uncertainty-aware adaptive QK ablation.
 
     The pilot consumes part of the same shot budget and its samples are reused.
     Targeted allocation is allowed only when all requested Krylov directions
     survive the pilot filter and the weakest retained overlap mode exceeds its
     predicted error threshold by ``adaptive_min_overlap_snr``. Otherwise the
-    remaining budget stays uniform. This makes "do not adapt" an explicit
-    hardware-aware decision rather than forcing a noisy sensitivity estimate.
+    remaining budget stays uniform. A hard condition-number ceiling can still
+    be requested explicitly, but is not imposed by default because it can alter
+    the target noiseless Krylov subspace.
     """
 
     pilot_fraction = float(pilot_fraction)
