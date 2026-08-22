@@ -1,5 +1,13 @@
 """Scalable hardware-error propagation and bias-aware quantum optimization."""
 
+from .calibration import (
+    CalibratedErrorMap,
+    CalibrationParameter,
+    CalibrationRule,
+    ExpandedCalibration,
+    load_calibrated_error_map,
+    save_calibrated_error_map,
+)
 from .channel import (
     ChannelMode,
     NoiseChannelApplication,
@@ -178,6 +186,12 @@ __all__ = [
     "symplectic_to_pauli",
     "closest_clifford",
     "nearest_clifford_process_fidelity",
+    "CalibratedErrorMap",
+    "CalibrationParameter",
+    "CalibrationRule",
+    "ExpandedCalibration",
+    "load_calibrated_error_map",
+    "save_calibrated_error_map",
     "ChannelMode",
     "NoiseChannelApplication",
     "ObservableImpactBatch",
