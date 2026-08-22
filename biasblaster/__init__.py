@@ -54,6 +54,11 @@ from .krylov import (
     recommended_overlap_floor,
     solve_krylov_generalized_eigenproblem,
 )
+from .krylov_regularization import (
+    OverlapModeAssessment,
+    assess_overlap_modes,
+    solve_noise_aware_krylov,
+)
 from .qkrylov_experiment import (
     EffectiveNoiseParameters,
     KrylovBenchmarkResult,
@@ -70,6 +75,7 @@ from .qkrylov_experiment import (
     trotter_evolution_circuit,
     zero_state_pauli_moments,
 )
+from .qkrylov_adaptive import run_tfim_qkrylov_adaptive_benchmark
 from .pauli import (
     embed_pauli_label,
     extract_pauli_label,
@@ -183,6 +189,9 @@ __all__ = [
     "debias_krylov_matrices",
     "optimal_shot_allocation",
     "optimize_energy_bias_controls",
+    "OverlapModeAssessment",
+    "assess_overlap_modes",
+    "solve_noise_aware_krylov",
     "PauliHamiltonianTerm",
     "KrylovEstimatorCircuit",
     "KrylovExperimentPlan",
@@ -197,4 +206,5 @@ __all__ = [
     "build_tfim_krylov_plan",
     "sample_pm1_expectations",
     "run_tfim_qkrylov_benchmark",
+    "run_tfim_qkrylov_adaptive_benchmark",
 ]
