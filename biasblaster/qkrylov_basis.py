@@ -77,11 +77,13 @@ def assess_tfim_time_step(
     max_condition_number: float | None = 25.0,
     support_cap: int | None = None,
 ) -> tuple[KrylovTimeCandidateAssessment, KrylovExperimentPlan]:
-    """Assess one candidate basis using only the propagated error model.
+    """Assess one candidate basis using the propagated error model.
 
-    The score uses the expected noisy overlap matrix, calibration covariance and
-    the shot covariance implied by a uniform planning allocation. The exact
-    ground-state energy is never consulted when ranking candidates.
+    Retained rank and conditioning use only the predicted noisy overlap matrix,
+    calibration covariance, and shot covariance implied by the planning budget.
+    ``first_order_residual_rmse`` compares the linear model with the offline
+    finite-channel simulator for regression diagnostics only; it is never used
+    to choose a candidate.
     """
 
     time_step = float(time_step)
@@ -109,10 +111,9 @@ def assess_tfim_time_step(
     )
     specs = tuple(estimator.spec for estimator in plan.estimators)
     model = build_krylov_error_model(combined, specs, plan.dimension)
-    ideal_h, ideal_s = assemble_krylov_matrices(
+    _, ideal_s = assemble_krylov_matrices(
         _values_by_name(plan, raw.ideal), specs, plan.dimension
     )
-    del ideal_h
     expected_s = ideal_s + model.bias_s
     assessment = assess_overlap_modes(
         expected_s,
@@ -177,8 +178,9 @@ def select_tfim_time_step(
     uncertainty/conditioning test and has at least ``minimum_robust_margin``.
 
     If no candidate is fully resolvable, the fallback maximizes retained rank,
-    then robust margin, then lower model residual and lower execution proxy.
-    The exact target energy is never part of the selection rule.
+    then robust margin, then prefers lower planned two-qubit execution cost and
+    smaller time spacing. Neither exact target energy nor offline finite-channel
+    residual is part of the decision rule.
     """
 
     candidates = tuple(float(value) for value in candidate_time_steps)
@@ -217,7 +219,6 @@ def select_tfim_time_step(
             key=lambda index: (
                 pairs[index][0].time_step,
                 pairs[index][0].weighted_two_qubit_executions,
-                pairs[index][0].first_order_residual_rmse,
             ),
         )
     else:
@@ -226,8 +227,8 @@ def select_tfim_time_step(
             key=lambda index: (
                 pairs[index][0].retained_rank,
                 pairs[index][0].robust_margin,
-                -pairs[index][0].first_order_residual_rmse,
                 -pairs[index][0].weighted_two_qubit_executions,
+                -pairs[index][0].time_step,
             ),
         )
     return KrylovTimeSelection(
