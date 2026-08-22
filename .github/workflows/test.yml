@@ -20,3 +20,4 @@ jobs:
       - run: python scripts/benchmark_qkrylov_basis.py --candidates 0.2,0.4,0.6 --qubits 2 --dimension 2 --trotter-steps 1 --shots 20000 --minimum-shots 100 --seed 7 --json
       - run: python scripts/benchmark_qkrylov_basis_sweep.py --candidates 0.2,0.4,0.6 --baseline-time-step 0.2 --seeds 3 --qubits 2 --dimension 2 --trotter-steps 1 --shots 20000 --minimum-shots 100 --json
       - run: python scripts/benchmark_qkrylov_sweep.py --seeds 5 --qubits 2 --dimension 2 --time-step 0.2 --trotter-steps 1 --shots 20000 --minimum-shots 100 --json
+      - run: python scripts/benchmark_h2_calibration.py --systems H2-1,H2-2 --budgets 5000,20000,100000 --candidates 0.1,0.2,0.3,0.4,0.5,0.6 --seeds 10 --json
