@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import statistics
 import sys
 from pathlib import Path
 
@@ -15,6 +14,9 @@ if __package__ in (None, ""):
 
 from biasblaster import EffectiveNoiseParameters
 from biasblaster.qkrylov_adaptive import run_tfim_qkrylov_adaptive_benchmark
+
+
+POLICIES = ("noise_modewise", "debiased_modewise", "adaptive_guarded")
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -45,6 +47,19 @@ def _finite_stats(values: list[float]) -> dict[str, float | int]:
     }
 
 
+def _comparison(candidate: np.ndarray, baseline: np.ndarray) -> dict[str, float]:
+    valid = np.isfinite(candidate) & np.isfinite(baseline)
+    if not np.any(valid):
+        return {"beats_fraction": float("nan"), "mean_relative_change": float("nan")}
+    candidate = candidate[valid]
+    baseline = baseline[valid]
+    denominator = np.maximum(np.abs(baseline), 1e-15)
+    return {
+        "beats_fraction": float(np.mean(candidate < baseline)),
+        "mean_relative_change": float(np.mean((candidate - baseline) / denominator)),
+    }
+
+
 def main() -> None:
     args = _parser().parse_args()
     if args.seeds < 1:
@@ -64,24 +79,21 @@ def main() -> None:
             noise=noise,
         )
         policy_map = {policy.name: policy for policy in result.policies}
-        rows.append({
+        row: dict[str, object] = {
             "seed": seed,
-            "ideal_qk_error": result.policies[0].ground_energy_error,
-            **{
-                f"{name}_error": (
-                    policy_map[name].ground_energy_error if name in policy_map else float("nan")
-                )
-                for name in ("noise_modewise", "debiased_modewise", "adaptive_guarded")
-            },
-            **{
-                f"{name}_rank": (
-                    policy_map[name].retained_rank if name in policy_map else 0
-                )
-                for name in ("noise_modewise", "debiased_modewise", "adaptive_guarded")
-            },
-        })
+            "ideal_qk_ground_error": result.policies[0].ground_energy_error,
+        }
+        for name in POLICIES:
+            policy = policy_map.get(name)
+            row[f"{name}_ground_error"] = (
+                policy.ground_energy_error if policy is not None else float("nan")
+            )
+            row[f"{name}_qk_deviation"] = (
+                policy.deviation_from_ideal_qk if policy is not None else float("nan")
+            )
+            row[f"{name}_rank"] = policy.retained_rank if policy is not None else 0
+        rows.append(row)
 
-    policies = ("noise_modewise", "debiased_modewise", "adaptive_guarded")
     summary: dict[str, object] = {
         "configuration": {
             "seeds": args.seeds,
@@ -93,41 +105,42 @@ def main() -> None:
             "shots": args.shots,
             "noise_scale": args.noise_scale,
         },
+        "primary_metric": "absolute deviation from ideal finite-dimensional QK energy",
         "policies": {},
     }
-    for policy in policies:
-        values = [float(row[f"{policy}_error"]) for row in rows]
-        stats = _finite_stats(values)
-        stats["full_rank_fraction"] = float(np.mean([
-            int(row[f"{policy}_rank"]) == args.dimension for row in rows
-        ]))
-        summary["policies"][policy] = stats
+    for policy in POLICIES:
+        qk_values = [float(row[f"{policy}_qk_deviation"]) for row in rows]
+        ground_values = [float(row[f"{policy}_ground_error"]) for row in rows]
+        summary["policies"][policy] = {
+            "qk_deviation": _finite_stats(qk_values),
+            "ground_error": _finite_stats(ground_values),
+            "full_rank_fraction": float(np.mean([
+                int(row[f"{policy}_rank"]) == args.dimension for row in rows
+            ])),
+        }
 
-    raw = np.asarray([float(row["noise_modewise_error"]) for row in rows])
-    debiased = np.asarray([float(row["debiased_modewise_error"]) for row in rows])
-    adaptive = np.asarray([float(row["adaptive_guarded_error"]) for row in rows])
-    valid_debiased = np.isfinite(raw) & np.isfinite(debiased)
-    valid_adaptive = np.isfinite(debiased) & np.isfinite(adaptive)
+    noisy_qk = np.asarray([float(row["noise_modewise_qk_deviation"]) for row in rows])
+    debiased_qk = np.asarray([float(row["debiased_modewise_qk_deviation"]) for row in rows])
+    adaptive_qk = np.asarray([float(row["adaptive_guarded_qk_deviation"]) for row in rows])
     summary["comparisons"] = {
-        "debiased_beats_noisy_fraction": float(np.mean(debiased[valid_debiased] < raw[valid_debiased])) if np.any(valid_debiased) else float("nan"),
-        "debiased_mean_relative_error_change": float(np.mean((debiased[valid_debiased] - raw[valid_debiased]) / raw[valid_debiased])) if np.any(valid_debiased) else float("nan"),
-        "adaptive_beats_debiased_fraction": float(np.mean(adaptive[valid_adaptive] < debiased[valid_adaptive])) if np.any(valid_adaptive) else float("nan"),
-        "adaptive_mean_relative_error_change": float(np.mean((adaptive[valid_adaptive] - debiased[valid_adaptive]) / debiased[valid_adaptive])) if np.any(valid_adaptive) else float("nan"),
+        "debiased_vs_noisy_qk_deviation": _comparison(debiased_qk, noisy_qk),
+        "adaptive_vs_debiased_qk_deviation": _comparison(adaptive_qk, debiased_qk),
     }
+
     payload = {"summary": summary, "rows": rows}
     if args.json:
         print(json.dumps(payload, indent=2, allow_nan=True))
         return
 
     print(json.dumps(summary, indent=2, allow_nan=True))
-    print("\nper-seed errors")
+    print("\nper-seed absolute deviation from ideal QK energy")
     print(f"{'seed':>5s} {'noisy':>12s} {'debiased':>12s} {'adaptive':>12s}")
     for row in rows:
         print(
             f"{int(row['seed']):5d} "
-            f"{float(row['noise_modewise_error']):12.5g} "
-            f"{float(row['debiased_modewise_error']):12.5g} "
-            f"{float(row['adaptive_guarded_error']):12.5g}"
+            f"{float(row['noise_modewise_qk_deviation']):12.5g} "
+            f"{float(row['debiased_modewise_qk_deviation']):12.5g} "
+            f"{float(row['adaptive_guarded_qk_deviation']):12.5g}"
         )
 
 
