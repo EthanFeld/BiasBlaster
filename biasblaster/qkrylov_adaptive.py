@@ -160,6 +160,18 @@ def guarded_shot_allocation(
     return allocation + extra
 
 
+def _minimum_retained_overlap_snr(assessment) -> float:
+    """Return min lambda/threshold over retained overlap modes."""
+
+    kept = np.flatnonzero(assessment.keep)
+    if kept.size == 0:
+        return 0.0
+    ratios = assessment.eigenvalues[kept] / np.maximum(
+        assessment.thresholds[kept], 1e-15
+    )
+    return float(np.min(ratios))
+
+
 def run_tfim_qkrylov_adaptive_benchmark(
     *,
     n_qubits: int = 2,
@@ -172,6 +184,7 @@ def run_tfim_qkrylov_adaptive_benchmark(
     adaptive_uniform_fraction: float = 0.50,
     adaptive_overlap_weight: float = 0.50,
     adaptive_max_weight_ratio: float = 4.0,
+    adaptive_min_overlap_snr: float = 4.0,
     max_condition_number: float | None = 25.0,
     seed: int = 7,
     noise: EffectiveNoiseParameters | None = None,
@@ -182,15 +195,19 @@ def run_tfim_qkrylov_adaptive_benchmark(
     """Run a fixed-budget, condition-aware adaptive QK ablation.
 
     The pilot consumes part of the same shot budget and its samples are reused.
-    The final generalized eigenproblem rejects overlap modes that are either
-    below their propagated uncertainty or would exceed ``max_condition_number``.
-    This prevents adaptation from gaining an apparent advantage by amplifying a
-    statistically resolved but numerically dangerous S direction.
+    Targeted allocation is allowed only when all requested Krylov directions
+    survive the pilot filter and the weakest retained overlap mode exceeds its
+    predicted error threshold by ``adaptive_min_overlap_snr``. Otherwise the
+    remaining budget stays uniform. This makes "do not adapt" an explicit
+    hardware-aware decision rather than forcing a noisy sensitivity estimate.
     """
 
     pilot_fraction = float(pilot_fraction)
+    adaptive_min_overlap_snr = float(adaptive_min_overlap_snr)
     if not 0.0 < pilot_fraction < 1.0:
         raise ValueError("pilot_fraction must lie strictly between zero and one")
+    if adaptive_min_overlap_snr < 1.0 or not np.isfinite(adaptive_min_overlap_snr):
+        raise ValueError("adaptive_min_overlap_snr must be finite and at least one")
     plan = build_tfim_krylov_plan(
         n_qubits=n_qubits,
         dimension=dimension,
@@ -288,34 +305,36 @@ def run_tfim_qkrylov_adaptive_benchmark(
     pilot_model = build_krylov_error_model(pilot_combined, specs, plan.dimension)
     pilot_h, pilot_s = debias_krylov_matrices(pilot_h, pilot_s, pilot_model)
 
+    pilot_is_safe = False
     try:
-        pilot_eigen, _ = solve_noise_aware_krylov(
+        pilot_eigen, pilot_assessment = solve_noise_aware_krylov(
             pilot_h, pilot_s, pilot_model,
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=False,
             max_condition_number=max_condition_number,
         )
-        sensitivity_model = calibration_model
+        pilot_is_safe = (
+            pilot_eigen.retained_overlap_rank == plan.dimension
+            and _minimum_retained_overlap_snr(pilot_assessment) >= adaptive_min_overlap_snr
+        )
     except ValueError:
-        pilot_eigen, _ = solve_noise_aware_krylov(
+        pilot_eigen, pilot_assessment = solve_noise_aware_krylov(
             plan.ideal_h, plan.ideal_s, calibration_model,
             safety_factor=0.0,
             absolute_floor=1e-12,
             include_predicted_bias=False,
             max_condition_number=max_condition_number,
         )
-        pilot_s = plan.ideal_s
-        sensitivity_model = calibration_model
 
-    energy_scores = _energy_observable_sensitivities(pilot_eigen, sensitivity_model)
-    overlap_scores = _overlap_stability_scores(pilot_s, sensitivity_model)
+    energy_scores = _energy_observable_sensitivities(pilot_eigen, calibration_model)
+    overlap_scores = _overlap_stability_scores(pilot_s, calibration_model)
     additional = guarded_shot_allocation(
         energy_scores,
         overlap_scores,
         per_shot_variances,
         remaining,
-        uniform_fraction=adaptive_uniform_fraction,
+        uniform_fraction=(adaptive_uniform_fraction if pilot_is_safe else 1.0),
         overlap_weight=adaptive_overlap_weight,
         max_weight_ratio=adaptive_max_weight_ratio,
     )
