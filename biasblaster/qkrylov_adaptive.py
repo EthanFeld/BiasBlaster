@@ -6,7 +6,7 @@ import numpy as np
 
 from .impact import combine_observable_impacts
 from .krylov import build_krylov_error_model, debias_krylov_matrices
-from .krylov_regularization import assess_overlap_modes, solve_noise_aware_krylov
+from .krylov_regularization import solve_noise_aware_krylov
 from .qkrylov_experiment import (
     EffectiveNoiseParameters,
     KrylovBenchmarkResult,
@@ -72,12 +72,7 @@ def _energy_observable_sensitivities(eigen, model) -> np.ndarray:
 
 
 def _overlap_stability_scores(overlap: np.ndarray, model) -> np.ndarray:
-    """Score estimators by influence on fragile overlap eigenvalues.
-
-    Each eigenmode contribution is divided by its distance above zero. This
-    prevents a locally large energy derivative from starving measurements that
-    keep the generalized eigenproblem well-conditioned.
-    """
+    """Score estimators by influence on fragile overlap eigenvalues."""
 
     values, vectors = np.linalg.eigh(np.asarray(overlap, dtype=complex))
     scores = np.zeros(len(model.observable_names), dtype=float)
@@ -116,13 +111,7 @@ def guarded_shot_allocation(
     overlap_weight: float = 0.50,
     max_weight_ratio: float = 4.0,
 ) -> np.ndarray:
-    """Allocate a budget without allowing one noisy pilot gradient to dominate.
-
-    A fixed fraction of the budget is spread uniformly. The remainder uses a
-    clipped blend of normalized energy and overlap-stability sensitivities. The
-    score is multiplied by the estimator's per-shot standard deviation, as in
-    variance-optimal first-order allocation.
-    """
+    """Allocate a budget without allowing one noisy pilot gradient to dominate."""
 
     energy = np.asarray(energy_sensitivities, dtype=float)
     overlap = np.asarray(overlap_scores, dtype=float)
@@ -183,17 +172,20 @@ def run_tfim_qkrylov_adaptive_benchmark(
     adaptive_uniform_fraction: float = 0.50,
     adaptive_overlap_weight: float = 0.50,
     adaptive_max_weight_ratio: float = 4.0,
+    max_condition_number: float | None = 25.0,
     seed: int = 7,
     noise: EffectiveNoiseParameters | None = None,
     calibration_relative_sigma: float = 0.10,
     overlap_safety_factor: float = 1.0,
     support_cap: int | None = None,
 ) -> KrylovBenchmarkResult:
-    """Run a resource-accounted and stability-guarded adaptive QK ablation.
+    """Run a fixed-budget, condition-aware adaptive QK ablation.
 
-    The pilot consumes part of the same fixed shot budget and its samples are
-    reused. Of the remaining budget, ``adaptive_uniform_fraction`` is reserved
-    uniformly and only the rest follows the guarded sensitivity score.
+    The pilot consumes part of the same shot budget and its samples are reused.
+    The final generalized eigenproblem rejects overlap modes that are either
+    below their propagated uncertainty or would exceed ``max_condition_number``.
+    This prevents adaptation from gaining an apparent advantage by amplifying a
+    statistically resolved but numerically dangerous S direction.
     """
 
     pilot_fraction = float(pilot_fraction)
@@ -256,6 +248,7 @@ def run_tfim_qkrylov_adaptive_benchmark(
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=True,
+            max_condition_number=max_condition_number,
         )
         policies.append(_policy(
             "noise_modewise", raw_result, plan, uniform,
@@ -269,6 +262,7 @@ def run_tfim_qkrylov_adaptive_benchmark(
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=False,
+            max_condition_number=max_condition_number,
         )
         policies.append(_policy(
             "debiased_modewise", corrected_result, plan, uniform,
@@ -300,6 +294,7 @@ def run_tfim_qkrylov_adaptive_benchmark(
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=False,
+            max_condition_number=max_condition_number,
         )
         sensitivity_model = calibration_model
     except ValueError:
@@ -308,6 +303,7 @@ def run_tfim_qkrylov_adaptive_benchmark(
             safety_factor=0.0,
             absolute_floor=1e-12,
             include_predicted_bias=False,
+            max_condition_number=max_condition_number,
         )
         pilot_s = plan.ideal_s
         sensitivity_model = calibration_model
@@ -341,6 +337,7 @@ def run_tfim_qkrylov_adaptive_benchmark(
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=False,
+            max_condition_number=max_condition_number,
         )
         policies.append(_policy(
             "adaptive_guarded", adaptive_result, plan, adaptive,
