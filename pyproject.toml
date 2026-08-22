@@ -13,6 +13,9 @@ dependencies = ["numpy>=1.24", "scipy>=1.10"]
 # The core package remains NumPy/SciPy-only. These packages are needed only
 # when adapting an external circuit corpus for the standalone benchmark.
 benchmark = ["qiskit>=1.0", "mqt.bench>=1.0"]
+qkrylov = ["qiskit>=1.0"]
+# Optional cloud execution bridge. Authentication/project access is handled by qnexus.
+quantinuum = ["qiskit>=1.0", "pytket", "pytket-qiskit", "qnexus"]
 fpga = ["pyserial>=3.5"]
 
 [tool.setuptools.packages.find]
