@@ -108,7 +108,6 @@ class H2CalibrationProfile:
     @property
     def p1(self) -> float:
         """Effective 1Q non-identity Pauli probability matching the RB infidelity."""
-
         return 1.5 * self.one_qubit_infidelity
 
     @property
@@ -118,7 +117,6 @@ class H2CalibrationProfile:
     @property
     def p2(self) -> float:
         """Effective 2Q non-identity Pauli probability matching the RB infidelity."""
-
         return 1.25 * self.two_qubit_infidelity
 
     @property
@@ -260,9 +258,6 @@ def _h2_occurrences(operations, profile: H2CalibrationProfile):
         else:
             raise ValueError("H2 reduced model supports only one- and two-qubit gates")
 
-    # The benchmark measures only the ancilla qubit (qubit zero). Public H2
-    # calibration exposes combined asymmetric SPAM, so apply it once here as an
-    # effective terminal confusion channel; do not add an independent p_init.
     boundary = len(operations)
     modes.extend((
         ChannelMode("h2_spam0", boundary, (0,), spam0_derivative, mean=profile.spam_0),
@@ -316,7 +311,8 @@ def prepare_h2_krylov(
         )
         finite_values[index] = finite[estimator.name]
     raw_combined = combine_observable_impacts(batches)
-    per_shot = np.maximum(1.0 - np.clip(finite_values, -1.0, 1.0) ** 2, 1e-12)
+    predicted = np.clip(raw_combined.predicted, -1.0, 1.0)
+    per_shot = np.maximum(1.0 - predicted * predicted, 1e-12)
     return H2PreparedKrylov(
         profile=profile,
         plan=plan,
@@ -358,8 +354,6 @@ def assess_h2_time_step(
 
     count = len(prepared.plan.estimators)
     allocation = _uniform_allocation(count, total_shots, minimum_shots)
-    # Selection must not use finite-channel sampled truth. Use the first-order
-    # predicted means for the shot planning covariance instead.
     predicted = np.clip(prepared.raw_combined.predicted, -1.0, 1.0)
     predicted_variances = np.maximum(1.0 - predicted * predicted, 1e-12)
     combined = combine_observable_impacts(
