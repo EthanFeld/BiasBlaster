@@ -23,6 +23,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--shots", type=int, default=100_000)
     parser.add_argument("--minimum-shots", type=int, default=100)
     parser.add_argument("--pilot-fraction", type=float, default=0.20)
+    parser.add_argument("--max-condition-number", type=float, default=25.0)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--noise-scale", type=float, default=1.0)
     parser.add_argument("--p1", type=float, default=2.5e-5)
@@ -57,6 +58,7 @@ def main() -> None:
         total_shots=args.shots,
         minimum_shots=args.minimum_shots,
         pilot_fraction=args.pilot_fraction,
+        max_condition_number=args.max_condition_number,
         seed=args.seed,
         noise=noise,
         calibration_relative_sigma=args.calibration_relative_sigma,
