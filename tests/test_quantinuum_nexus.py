@@ -12,7 +12,25 @@ def test_counts_to_pm1_expectation_accepts_tuple_and_string_keys():
 def test_nexus_execution_config_validates_resource_controls():
     config = NexusExecutionConfig(system_name="Helios-1E-lite", timeout=120.0)
     assert config.timeout == 120.0
+    assert config.error_model == "qsystem"
     with pytest.raises(ValueError):
         NexusExecutionConfig(timeout=0.0)
     with pytest.raises(ValueError):
         NexusExecutionConfig(max_cost=-1.0)
+
+
+def test_nexus_execution_config_validates_error_model_parameters():
+    config = NexusExecutionConfig(
+        error_model="depolarizing",
+        p1=2.5e-5,
+        p2=8e-4,
+        p_meas=1e-6,
+        p_init=5e-4,
+        error_seed=4,
+        runtime_seed=5,
+    )
+    assert config.p2 == 8e-4
+    with pytest.raises(ValueError):
+        NexusExecutionConfig(error_model="invalid")
+    with pytest.raises(ValueError):
+        NexusExecutionConfig(error_model="depolarizing", p2=1.1)
