@@ -59,6 +59,12 @@ from .krylov_regularization import (
     assess_overlap_modes,
     solve_noise_aware_krylov,
 )
+from .krylov_robust import (
+    BiasShrinkageResult,
+    shrink_observable_bias,
+    shrinkage_weights,
+    with_shrunk_observable_bias,
+)
 from .qkrylov_experiment import (
     EffectiveNoiseParameters,
     KrylovBenchmarkResult,
@@ -82,6 +88,7 @@ from .qkrylov_basis import (
     assess_tfim_time_step,
     select_tfim_time_step,
 )
+from .qkrylov_shrinkage import run_tfim_qkrylov_shrinkage_policy
 from .quantinuum_nexus import (
     NexusExecutionConfig,
     counts_to_pm1_expectation,
@@ -207,6 +214,10 @@ __all__ = [
     "OverlapModeAssessment",
     "assess_overlap_modes",
     "solve_noise_aware_krylov",
+    "BiasShrinkageResult",
+    "shrinkage_weights",
+    "shrink_observable_bias",
+    "with_shrunk_observable_bias",
     "PauliHamiltonianTerm",
     "KrylovEstimatorCircuit",
     "KrylovExperimentPlan",
@@ -222,6 +233,7 @@ __all__ = [
     "sample_pm1_expectations",
     "run_tfim_qkrylov_benchmark",
     "run_tfim_qkrylov_adaptive_benchmark",
+    "run_tfim_qkrylov_shrinkage_policy",
     "KrylovTimeCandidateAssessment",
     "KrylovTimeSelection",
     "assess_tfim_time_step",
