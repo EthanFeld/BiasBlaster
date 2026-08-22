@@ -18,4 +18,5 @@ jobs:
       - run: python -m pytest -q
       - run: python scripts/benchmark_qkrylov.py --qubits 2 --dimension 2 --time-step 0.2 --trotter-steps 1 --shots 20000 --minimum-shots 100 --json
       - run: python scripts/benchmark_qkrylov_basis.py --candidates 0.2,0.4,0.6 --qubits 2 --dimension 2 --trotter-steps 1 --shots 20000 --minimum-shots 100 --seed 7 --json
+      - run: python scripts/benchmark_qkrylov_basis_sweep.py --candidates 0.2,0.4,0.6 --baseline-time-step 0.2 --seeds 3 --qubits 2 --dimension 2 --trotter-steps 1 --shots 20000 --minimum-shots 100 --json
       - run: python scripts/benchmark_qkrylov_sweep.py --seeds 5 --qubits 2 --dimension 2 --time-step 0.2 --trotter-steps 1 --shots 20000 --minimum-shots 100 --json
