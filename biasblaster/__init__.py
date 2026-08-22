@@ -76,6 +76,12 @@ from .qkrylov_experiment import (
     zero_state_pauli_moments,
 )
 from .qkrylov_adaptive import run_tfim_qkrylov_adaptive_benchmark
+from .qkrylov_basis import (
+    KrylovTimeCandidateAssessment,
+    KrylovTimeSelection,
+    assess_tfim_time_step,
+    select_tfim_time_step,
+)
 from .quantinuum_nexus import (
     NexusExecutionConfig,
     counts_to_pm1_expectation,
@@ -216,6 +222,10 @@ __all__ = [
     "sample_pm1_expectations",
     "run_tfim_qkrylov_benchmark",
     "run_tfim_qkrylov_adaptive_benchmark",
+    "KrylovTimeCandidateAssessment",
+    "KrylovTimeSelection",
+    "assess_tfim_time_step",
+    "select_tfim_time_step",
     "NexusExecutionConfig",
     "estimator_to_qiskit",
     "estimator_to_pytket",
