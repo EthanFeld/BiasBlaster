@@ -22,6 +22,7 @@ from .channel import (
     reset_to_zero_ptm,
     unitary_error_ptm,
 )
+from .impact import combine_observable_impacts
 from .local_transfer import conjugate_sparse_pauli, local_pauli_transfer, pauli_transfer
 from .model import CircuitOperation
 from .nearest_clifford import (
@@ -139,6 +140,7 @@ __all__ = [
     "apply_local_ptm_sparse",
     "contract_local_perturbation",
     "estimate_observable_impacts",
+    "combine_observable_impacts",
     "propagate_noisy_observables",
     "pauli_inner",
     "kraus_to_ptm",
