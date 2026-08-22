@@ -9,7 +9,7 @@ the offline benchmark.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Literal, Sequence
 
 import numpy as np
 
@@ -18,13 +18,32 @@ from .qkrylov_experiment import KrylovEstimatorCircuit, KrylovExperimentPlan
 
 @dataclass(frozen=True)
 class NexusExecutionConfig:
-    """Configuration for a batched Nexus Quantum Krylov execution."""
+    """Configuration for a batched Nexus Quantum Krylov execution.
+
+    ``error_model`` controls the official Nexus emulator configuration:
+
+    - ``qsystem`` uses Quantinuum's preconfigured hardware-like error model;
+    - ``depolarizing`` uses the four simple probabilities below;
+    - ``no_error`` disables the emulator error model.
+
+    Full ``HeliosCustomErrorModel`` construction remains available through
+    qnexus directly when challenge access provides a complete Helios parameter
+    set; the BiasBlaster channel layer can ingest richer calibrated channels
+    independently of this convenience configuration.
+    """
 
     project_name: str = "BiasBlaster Quantum Krylov"
     system_name: str = "Helios-1E-lite"
     optimisation_level: int = 1
     timeout: float = 900.0
     max_cost: float | None = None
+    error_model: Literal["qsystem", "depolarizing", "no_error"] = "qsystem"
+    error_seed: int | None = None
+    runtime_seed: int | None = None
+    p1: float = 2.5e-5
+    p2: float = 8.0e-4
+    p_meas: float = 1.0e-6
+    p_init: float = 5.0e-4
 
     def __post_init__(self) -> None:
         if not self.project_name or not self.system_name:
@@ -40,6 +59,13 @@ class NexusExecutionConfig:
             if max_cost <= 0 or not np.isfinite(max_cost):
                 raise ValueError("max_cost must be finite and positive")
             object.__setattr__(self, "max_cost", max_cost)
+        if self.error_model not in {"qsystem", "depolarizing", "no_error"}:
+            raise ValueError("unsupported Nexus error_model")
+        for name in ("p1", "p2", "p_meas", "p_init"):
+            value = float(getattr(self, name))
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must lie in [0, 1]")
+            object.__setattr__(self, name, value)
 
 
 def _require_quantinuum_stack():
@@ -90,18 +116,30 @@ def plan_to_pytket(plan: KrylovExperimentPlan):
     return [estimator_to_pytket(estimator) for estimator in plan.estimators]
 
 
+def _nexus_error_model(qnx, config: NexusExecutionConfig):
+    if config.error_model == "qsystem":
+        return qnx.models.QSystemErrorModel(seed=config.error_seed)
+    if config.error_model == "no_error":
+        return qnx.models.NoErrorModel(seed=config.error_seed)
+    return qnx.models.DepolarizingErrorModel(
+        seed=config.error_seed,
+        p_1q=config.p1,
+        p_2q=config.p2,
+        p_meas=config.p_meas,
+        p_init=config.p_init,
+    )
+
+
 def _helios_config(qnx, plan: KrylovExperimentPlan, config: NexusExecutionConfig):
-    kwargs = {
-        "system_name": config.system_name,
-        "emulator_config": qnx.models.HeliosEmulatorConfig(
-            n_qubits=max(estimator.n_qubits for estimator in plan.estimators),
-        ),
-    }
-    if config.max_cost is not None:
-        # max_cost remains accepted by HeliosConfig although newer Nexus APIs
-        # prefer per-job max-cost controls.
-        kwargs["max_cost"] = config.max_cost
-    return qnx.models.HeliosConfig(**kwargs)
+    emulator = qnx.models.HeliosEmulatorConfig(
+        n_qubits=max(estimator.n_qubits for estimator in plan.estimators),
+        error_model=_nexus_error_model(qnx, config),
+        runtime=qnx.models.HeliosRuntime(seed=config.runtime_seed),
+    )
+    return qnx.models.HeliosConfig(
+        system_name=config.system_name,
+        emulator_config=emulator,
+    )
 
 
 def upload_compile_plan(
@@ -195,14 +233,17 @@ def execute_nexus_estimators(
     if config is None:
         config = NexusExecutionConfig()
     project, backend, compiled = upload_compile_plan(plan, config=config)
-    results = qnx.execute(
-        programs=compiled,
-        n_shots=[int(value) for value in allocations],
-        backend_config=backend,
-        name="BiasBlaster-QK-execute",
-        project=project,
-        timeout=config.timeout,
-    )
+    execute_kwargs = {
+        "programs": compiled,
+        "n_shots": [int(value) for value in allocations],
+        "backend_config": backend,
+        "name": "BiasBlaster-QK-execute",
+        "project": project,
+        "timeout": config.timeout,
+    }
+    if config.max_cost is not None:
+        execute_kwargs["max_cost"] = config.max_cost
+    results = qnx.execute(**execute_kwargs)
     if len(results) != len(plan.estimators):
         raise RuntimeError("Nexus returned a different number of results than estimators")
     return np.asarray(
