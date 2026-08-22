@@ -10,7 +10,8 @@ from pathlib import Path
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from biasblaster import EffectiveNoiseParameters, run_tfim_qkrylov_benchmark
+from biasblaster import EffectiveNoiseParameters
+from biasblaster.qkrylov_adaptive import run_tfim_qkrylov_adaptive_benchmark
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -21,6 +22,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--trotter-steps", type=int, default=2)
     parser.add_argument("--shots", type=int, default=100_000)
     parser.add_argument("--minimum-shots", type=int, default=100)
+    parser.add_argument("--pilot-fraction", type=float, default=0.20)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--noise-scale", type=float, default=1.0)
     parser.add_argument("--p1", type=float, default=2.5e-5)
@@ -47,13 +49,14 @@ def main() -> None:
         p_dephase_2q=args.p_dephase_2q,
         scale=args.noise_scale,
     )
-    result = run_tfim_qkrylov_benchmark(
+    result = run_tfim_qkrylov_adaptive_benchmark(
         n_qubits=args.qubits,
         dimension=args.dimension,
         time_step=args.time_step,
         trotter_steps=args.trotter_steps,
         total_shots=args.shots,
         minimum_shots=args.minimum_shots,
+        pilot_fraction=args.pilot_fraction,
         seed=args.seed,
         noise=noise,
         calibration_relative_sigma=args.calibration_relative_sigma,
