@@ -16,7 +16,8 @@ from typing import Literal, Mapping, Sequence
 
 import numpy as np
 
-from .channel import ChannelMode
+from .channel import ChannelMode, ObservableImpactBatch, estimate_observable_impacts
+from .impact import collapse_shared_modes, combine_observable_impacts
 from .model import CircuitOperation
 
 
@@ -158,6 +159,21 @@ class CalibratedErrorMap:
     def parameter_names(self) -> tuple[str, ...]:
         return tuple(parameter.name for parameter in self.parameters)
 
+    def covariance_for(self, parameter_names: Sequence[str]) -> np.ndarray | None:
+        """Return calibration covariance reordered/subselected by parameter name."""
+
+        if self.covariance is None:
+            return None
+        requested = tuple(str(name) for name in parameter_names)
+        if len(set(requested)) != len(requested):
+            raise ValueError("parameter_names must be unique")
+        index = {name: position for position, name in enumerate(self.parameter_names)}
+        unknown = sorted(set(requested) - set(index))
+        if unknown:
+            raise ValueError(f"unknown calibration parameters: {unknown}")
+        indices = np.asarray([index[name] for name in requested], dtype=int)
+        return self.covariance[np.ix_(indices, indices)].copy()
+
     def expand(
         self,
         circuit: Sequence[CircuitOperation],
@@ -275,6 +291,81 @@ class CalibratedErrorMap:
             else np.asarray(covariance_payload, dtype=float)
         )
         return cls(parameters=parameters, rules=rules, covariance=covariance)
+
+
+def estimate_calibrated_impacts(
+    circuit: Sequence[CircuitOperation],
+    initial_state: Mapping[str, float],
+    observables: Mapping[str, Mapping[str, float]],
+    calibration: CalibratedErrorMap,
+    n_qubits: int,
+    *,
+    shot_covariance: np.ndarray | None = None,
+    coefficient_tol: float = 1e-12,
+    support_cap: int | None = None,
+) -> ObservableImpactBatch:
+    """Propagate a calibrated hardware error map to circuit observables.
+
+    Repeated gate occurrences are first propagated independently and then
+    collapsed onto their shared physical calibration parameter. The returned
+    Jacobian therefore has one column per calibrated parameter that actually
+    affects this circuit, with calibration and optional shot covariance already
+    propagated to observable space.
+    """
+
+    expanded = calibration.expand(circuit, n_qubits)
+    raw = estimate_observable_impacts(
+        circuit,
+        initial_state,
+        observables,
+        expanded.modes,
+        n_qubits,
+        coefficient_tol=coefficient_tol,
+        support_cap=support_cap,
+    )
+    collapsed = collapse_shared_modes(raw)
+    mode_covariance = calibration.covariance_for(collapsed.mode_names)
+    if mode_covariance is None and shot_covariance is None:
+        return collapsed
+    return combine_observable_impacts(
+        (collapsed,),
+        mode_covariance=mode_covariance,
+        shot_covariance=shot_covariance,
+    )
+
+
+def combine_calibrated_impacts(
+    batches: Sequence[ObservableImpactBatch],
+    calibration: CalibratedErrorMap,
+    *,
+    shot_covariance: np.ndarray | None = None,
+) -> ObservableImpactBatch:
+    """Combine raw/uncorrelated circuit impacts using one device calibration map.
+
+    This is the multi-circuit bridge used by Quantum Krylov: shared calibration
+    parameter names induce cross-circuit covariance in the assembled H/S
+    estimators. Batches may still contain repeated occurrence names; they are
+    collapsed automatically before global alignment.
+    """
+
+    prepared: list[ObservableImpactBatch] = []
+    for batch in batches:
+        if batch.covariance is not None or batch.mode_covariance is not None:
+            raise ValueError(
+                "combine_calibrated_impacts expects raw batches before covariance"
+            )
+        if len(set(batch.mode_names)) != len(batch.mode_names):
+            batch = collapse_shared_modes(batch)
+        prepared.append(batch)
+    raw_global = combine_observable_impacts(prepared)
+    mode_covariance = calibration.covariance_for(raw_global.mode_names)
+    if mode_covariance is None and shot_covariance is None:
+        return raw_global
+    return combine_observable_impacts(
+        prepared,
+        mode_covariance=mode_covariance,
+        shot_covariance=shot_covariance,
+    )
 
 
 def load_calibrated_error_map(path: str | Path) -> CalibratedErrorMap:
