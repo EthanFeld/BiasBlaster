@@ -104,7 +104,18 @@ def main() -> None:
             noise=noise,
             max_condition_number=args.max_condition_number,
         )
-        selected_shrinkage, shrinkage = run_tfim_qkrylov_shrinkage_policy(
+        baseline_shrinkage, baseline_shrink = run_tfim_qkrylov_shrinkage_policy(
+            n_qubits=args.qubits,
+            dimension=args.dimension,
+            time_step=args.baseline_time_step,
+            trotter_steps=args.trotter_steps,
+            total_shots=args.shots,
+            minimum_shots=args.minimum_shots,
+            seed=seed,
+            noise=noise,
+            shrinkage_strength=args.shrinkage_strength,
+        )
+        selected_shrinkage, selected_shrink = run_tfim_qkrylov_shrinkage_policy(
             n_qubits=args.qubits,
             dimension=args.dimension,
             time_step=selection.selected_time_step,
@@ -121,29 +132,40 @@ def main() -> None:
             "seed": seed,
             "baseline_ground_error": base_policy.ground_energy_error,
             "selected_ground_error": selected_policy.ground_energy_error,
+            "baseline_shrinkage_ground_error": baseline_shrinkage.ground_energy_error,
             "selected_shrinkage_ground_error": selected_shrinkage.ground_energy_error,
             "baseline_qk_deviation": base_policy.deviation_from_ideal_qk,
             "selected_qk_deviation": selected_policy.deviation_from_ideal_qk,
+            "baseline_shrinkage_qk_deviation": baseline_shrinkage.deviation_from_ideal_qk,
             "selected_shrinkage_qk_deviation": selected_shrinkage.deviation_from_ideal_qk,
             "baseline_rank": base_policy.retained_rank,
             "selected_rank": selected_policy.retained_rank,
+            "baseline_shrinkage_rank": baseline_shrinkage.retained_rank,
             "selected_shrinkage_rank": selected_shrinkage.retained_rank,
             "baseline_ideal_qk_error": baseline.policies[0].ground_energy_error,
             "selected_ideal_qk_error": selected.policies[0].ground_energy_error,
             "baseline_two_qubit_executions": base_policy.weighted_two_qubit_executions,
             "selected_two_qubit_executions": selected_policy.weighted_two_qubit_executions,
+            "baseline_shrinkage_two_qubit_executions": baseline_shrinkage.weighted_two_qubit_executions,
             "selected_shrinkage_two_qubit_executions": selected_shrinkage.weighted_two_qubit_executions,
-            "selected_shrinkage_mean_weight": float(np.mean(shrinkage.weights)),
+            "baseline_shrinkage_mean_weight": float(np.mean(baseline_shrink.weights)),
+            "selected_shrinkage_mean_weight": float(np.mean(selected_shrink.weights)),
         })
 
     baseline_errors = np.asarray([row["baseline_ground_error"] for row in rows], dtype=float)
     selected_errors = np.asarray([row["selected_ground_error"] for row in rows], dtype=float)
-    shrinkage_errors = np.asarray(
+    baseline_shrinkage_errors = np.asarray(
+        [row["baseline_shrinkage_ground_error"] for row in rows], dtype=float
+    )
+    selected_shrinkage_errors = np.asarray(
         [row["selected_shrinkage_ground_error"] for row in rows], dtype=float
     )
     baseline_qk = np.asarray([row["baseline_qk_deviation"] for row in rows], dtype=float)
     selected_qk = np.asarray([row["selected_qk_deviation"] for row in rows], dtype=float)
-    shrinkage_qk = np.asarray(
+    baseline_shrinkage_qk = np.asarray(
+        [row["baseline_shrinkage_qk_deviation"] for row in rows], dtype=float
+    )
+    selected_shrinkage_qk = np.asarray(
         [row["selected_shrinkage_qk_deviation"] for row in rows], dtype=float
     )
     payload = {
@@ -169,16 +191,24 @@ def main() -> None:
         "comparison": {
             "baseline_ground_error": _stats(baseline_errors.tolist()),
             "selected_ground_error": _stats(selected_errors.tolist()),
-            "selected_shrinkage_ground_error": _stats(shrinkage_errors.tolist()),
+            "baseline_shrinkage_ground_error": _stats(baseline_shrinkage_errors.tolist()),
+            "selected_shrinkage_ground_error": _stats(selected_shrinkage_errors.tolist()),
             "baseline_qk_deviation": _stats(baseline_qk.tolist()),
             "selected_qk_deviation": _stats(selected_qk.tolist()),
-            "selected_shrinkage_qk_deviation": _stats(shrinkage_qk.tolist()),
+            "baseline_shrinkage_qk_deviation": _stats(baseline_shrinkage_qk.tolist()),
+            "selected_shrinkage_qk_deviation": _stats(selected_shrinkage_qk.tolist()),
             "selected_vs_baseline_ground": _comparison(selected_errors, baseline_errors),
-            "selected_shrinkage_vs_baseline_ground": _comparison(
-                shrinkage_errors, baseline_errors
+            "selected_shrinkage_vs_baseline_full_debias_ground": _comparison(
+                selected_shrinkage_errors, baseline_errors
+            ),
+            "selected_shrinkage_vs_baseline_shrinkage_ground": _comparison(
+                selected_shrinkage_errors, baseline_shrinkage_errors
+            ),
+            "selected_shrinkage_vs_baseline_shrinkage_qk": _comparison(
+                selected_shrinkage_qk, baseline_shrinkage_qk
             ),
             "selected_shrinkage_vs_selected_full_debias_qk": _comparison(
-                shrinkage_qk, selected_qk
+                selected_shrinkage_qk, selected_qk
             ),
             "baseline_full_rank_fraction": float(np.mean([
                 row["baseline_rank"] == args.dimension for row in rows
@@ -186,8 +216,14 @@ def main() -> None:
             "selected_full_rank_fraction": float(np.mean([
                 row["selected_rank"] == args.dimension for row in rows
             ])),
+            "baseline_shrinkage_full_rank_fraction": float(np.mean([
+                row["baseline_shrinkage_rank"] == args.dimension for row in rows
+            ])),
             "selected_shrinkage_full_rank_fraction": float(np.mean([
                 row["selected_shrinkage_rank"] == args.dimension for row in rows
+            ])),
+            "baseline_shrinkage_mean_weight": float(np.mean([
+                row["baseline_shrinkage_mean_weight"] for row in rows
             ])),
             "selected_shrinkage_mean_weight": float(np.mean([
                 row["selected_shrinkage_mean_weight"] for row in rows
