@@ -1,9 +1,10 @@
 """Hardware-aware selection of time-evolution Krylov basis spacing.
 
-The selector deliberately does not use the exact ground-state energy.  It asks
-which candidate time grid is expected to produce the most statistically and
+The selector deliberately does not use the exact ground-state energy. It asks
+which candidate time grid is expected to produce a statistically and
 numerically resolvable overlap subspace under the calibrated channel model and
-a fixed measurement budget.
+a fixed measurement budget, then prefers the smallest time separation that
+passes those hardware-resolution checks.
 """
 
 from __future__ import annotations
@@ -79,7 +80,7 @@ def assess_tfim_time_step(
     """Assess one candidate basis using only the propagated error model.
 
     The score uses the expected noisy overlap matrix, calibration covariance and
-    the shot covariance implied by a uniform planning allocation.  The exact
+    the shot covariance implied by a uniform planning allocation. The exact
     ground-state energy is never consulted when ranking candidates.
     """
 
@@ -122,7 +123,7 @@ def assess_tfim_time_step(
         max_condition_number=max_condition_number,
     )
     eigenvalues = np.asarray(assessment.eigenvalues, dtype=float)
-    largest = max(float(np.max(eigenvalues, initial=0.0)), 1e-15)
+    largest = max(float(np.max(eigenvalues)), 1e-15)
     margins = (eigenvalues - assessment.thresholds) / largest
     retained = int(np.count_nonzero(assessment.keep))
     if retained:
@@ -130,7 +131,7 @@ def assess_tfim_time_step(
         smallest_kept = float(np.min(eigenvalues[assessment.keep]))
         condition = largest / max(smallest_kept, 1e-15)
     else:
-        robust_margin = float(np.max(margins, initial=-np.inf))
+        robust_margin = float(np.max(margins))
         condition = float("inf")
     residual = combined.predicted - finite_values
     weighted = int(sum(
@@ -142,8 +143,8 @@ def assess_tfim_time_step(
         retained_rank=retained,
         dimension=dimension,
         robust_margin=robust_margin,
-        minimum_overlap_eigenvalue=float(np.min(eigenvalues, initial=0.0)),
-        maximum_overlap_eigenvalue=float(np.max(eigenvalues, initial=0.0)),
+        minimum_overlap_eigenvalue=float(np.min(eigenvalues)),
+        maximum_overlap_eigenvalue=float(np.max(eigenvalues)),
         predicted_condition_number=float(condition),
         conditioning_floor=float(assessment.conditioning_floor),
         first_order_residual_rmse=float(np.sqrt(np.mean(residual * residual))),
@@ -164,20 +165,30 @@ def select_tfim_time_step(
     calibration_relative_sigma: float = 0.10,
     overlap_safety_factor: float = 1.0,
     max_condition_number: float | None = 25.0,
+    minimum_robust_margin: float = 0.0,
     support_cap: int | None = None,
 ) -> KrylovTimeSelection:
-    """Choose the candidate with the strongest predicted resolvable subspace.
+    """Choose the smallest candidate whose full Krylov rank is resolvable.
 
-    Candidates are ordered lexicographically by retained rank, robust overlap
-    margin, lower first-order model residual, and lower two-qubit execution
-    proxy.  The energy reference is intentionally absent from this decision.
+    Time-evolution Krylov states become less linearly dependent as their spacing
+    increases, but unnecessarily large spacing can worsen the target finite-
+    dimensional approximation. The default policy therefore selects the
+    smallest candidate for which every overlap mode survives the propagated
+    uncertainty/conditioning test and has at least ``minimum_robust_margin``.
+
+    If no candidate is fully resolvable, the fallback maximizes retained rank,
+    then robust margin, then lower model residual and lower execution proxy.
+    The exact target energy is never part of the selection rule.
     """
 
     candidates = tuple(float(value) for value in candidate_time_steps)
+    minimum_robust_margin = float(minimum_robust_margin)
     if not candidates:
         raise ValueError("at least one candidate_time_step is required")
     if len(set(candidates)) != len(candidates):
         raise ValueError("candidate_time_steps must be unique")
+    if not np.isfinite(minimum_robust_margin):
+        raise ValueError("minimum_robust_margin must be finite")
 
     pairs = [
         assess_tfim_time_step(
@@ -195,15 +206,30 @@ def select_tfim_time_step(
         )
         for value in candidates
     ]
-    best_index = max(
-        range(len(pairs)),
-        key=lambda index: (
-            pairs[index][0].retained_rank,
-            pairs[index][0].robust_margin,
-            -pairs[index][0].first_order_residual_rmse,
-            -pairs[index][0].weighted_two_qubit_executions,
-        ),
-    )
+    feasible = [
+        index
+        for index, (assessment, _) in enumerate(pairs)
+        if assessment.full_rank and assessment.robust_margin >= minimum_robust_margin
+    ]
+    if feasible:
+        best_index = min(
+            feasible,
+            key=lambda index: (
+                pairs[index][0].time_step,
+                pairs[index][0].weighted_two_qubit_executions,
+                pairs[index][0].first_order_residual_rmse,
+            ),
+        )
+    else:
+        best_index = max(
+            range(len(pairs)),
+            key=lambda index: (
+                pairs[index][0].retained_rank,
+                pairs[index][0].robust_margin,
+                -pairs[index][0].first_order_residual_rmse,
+                -pairs[index][0].weighted_two_qubit_executions,
+            ),
+        )
     return KrylovTimeSelection(
         selected_time_step=pairs[best_index][0].time_step,
         selected_plan=pairs[best_index][1],
