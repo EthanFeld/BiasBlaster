@@ -1,12 +1,12 @@
-"""Fair pilot-stage adaptive policies for the Quantum Krylov benchmark."""
+"""Fair, guarded pilot-stage adaptive policies for Quantum Krylov benchmarks."""
 
 from __future__ import annotations
 
 import numpy as np
 
 from .impact import combine_observable_impacts
-from .krylov import build_krylov_error_model, debias_krylov_matrices, optimal_shot_allocation
-from .krylov_regularization import solve_noise_aware_krylov
+from .krylov import build_krylov_error_model, debias_krylov_matrices
+from .krylov_regularization import assess_overlap_modes, solve_noise_aware_krylov
 from .qkrylov_experiment import (
     EffectiveNoiseParameters,
     KrylovBenchmarkResult,
@@ -21,13 +21,7 @@ from .qkrylov_experiment import (
 )
 
 
-def _policy(
-    name: str,
-    result,
-    plan,
-    allocation: np.ndarray,
-    threshold: float,
-) -> PolicyResult:
+def _policy(name, result, plan, allocation: np.ndarray, threshold: float) -> PolicyResult:
     weighted = int(
         sum(
             int(allocation[index]) * estimator.two_qubit_gates
@@ -66,13 +60,7 @@ def _energy_observable_sensitivities(eigen, model) -> np.ndarray:
     energy = eigen.energy
     return np.asarray(
         [
-            float(
-                np.real(
-                    vector.conj().T
-                    @ (dh - energy * ds)
-                    @ vector
-                )
-            )
+            float(np.real(vector.conj().T @ (dh - energy * ds) @ vector))
             for dh, ds in zip(
                 model.observable_weights_h,
                 model.observable_weights_s,
@@ -81,6 +69,106 @@ def _energy_observable_sensitivities(eigen, model) -> np.ndarray:
         ],
         dtype=float,
     )
+
+
+def _overlap_stability_scores(overlap: np.ndarray, model) -> np.ndarray:
+    """Score estimators by influence on fragile overlap eigenvalues.
+
+    Each eigenmode contribution is divided by its distance above zero. This
+    prevents a locally large energy derivative from starving measurements that
+    keep the generalized eigenproblem well-conditioned.
+    """
+
+    values, vectors = np.linalg.eigh(np.asarray(overlap, dtype=complex))
+    scores = np.zeros(len(model.observable_names), dtype=float)
+    positive = values > 1e-12
+    for mode_index in np.flatnonzero(positive):
+        vector = vectors[:, mode_index]
+        scale = max(float(values[mode_index]), 1e-6)
+        gradients = np.asarray(
+            [
+                abs(float(np.real(vector.conj().T @ ds @ vector)))
+                for ds in model.observable_weights_s
+            ],
+            dtype=float,
+        )
+        scores = np.maximum(scores, gradients / scale)
+    return scores
+
+
+def _normalize_scores(values: np.ndarray) -> np.ndarray:
+    values = np.asarray(values, dtype=float)
+    finite = np.where(np.isfinite(values), np.maximum(values, 0.0), 0.0)
+    positive = finite[finite > 0]
+    if positive.size == 0:
+        return np.zeros_like(finite)
+    reference = float(np.median(positive))
+    return finite / max(reference, 1e-15)
+
+
+def guarded_shot_allocation(
+    energy_sensitivities: np.ndarray,
+    overlap_scores: np.ndarray,
+    per_shot_variances: np.ndarray,
+    total_shots: int,
+    *,
+    uniform_fraction: float = 0.50,
+    overlap_weight: float = 0.50,
+    max_weight_ratio: float = 4.0,
+) -> np.ndarray:
+    """Allocate a budget without allowing one noisy pilot gradient to dominate.
+
+    A fixed fraction of the budget is spread uniformly. The remainder uses a
+    clipped blend of normalized energy and overlap-stability sensitivities. The
+    score is multiplied by the estimator's per-shot standard deviation, as in
+    variance-optimal first-order allocation.
+    """
+
+    energy = np.asarray(energy_sensitivities, dtype=float)
+    overlap = np.asarray(overlap_scores, dtype=float)
+    variances = np.asarray(per_shot_variances, dtype=float)
+    if energy.ndim != 1 or overlap.shape != energy.shape or variances.shape != energy.shape:
+        raise ValueError("adaptive score vectors must have the same one-dimensional shape")
+    if np.any(variances < 0) or not np.all(np.isfinite(variances)):
+        raise ValueError("per_shot_variances must be finite and nonnegative")
+    if total_shots < 0:
+        raise ValueError("total_shots must be nonnegative")
+    if not 0.0 <= uniform_fraction <= 1.0:
+        raise ValueError("uniform_fraction must lie in [0, 1]")
+    if not 0.0 <= overlap_weight <= 1.0:
+        raise ValueError("overlap_weight must lie in [0, 1]")
+    if max_weight_ratio < 1.0 or not np.isfinite(max_weight_ratio):
+        raise ValueError("max_weight_ratio must be finite and at least one")
+    count = len(energy)
+    if count == 0:
+        return np.zeros(0, dtype=int)
+
+    uniform_total = int(round(total_shots * uniform_fraction))
+    uniform_total = min(max(uniform_total, 0), total_shots)
+    allocation = np.full(count, uniform_total // count, dtype=int)
+    allocation[: uniform_total % count] += 1
+    targeted_total = total_shots - int(np.sum(allocation))
+    if targeted_total == 0:
+        return allocation
+
+    energy_score = _normalize_scores(np.abs(energy))
+    overlap_score = _normalize_scores(overlap)
+    blended = (1.0 - overlap_weight) * energy_score + overlap_weight * overlap_score
+    blended *= np.sqrt(variances)
+    positive = blended[blended > 0]
+    if positive.size == 0:
+        blended = np.ones(count, dtype=float)
+    else:
+        floor = float(np.median(positive)) / max_weight_ratio
+        ceiling = float(np.median(positive)) * max_weight_ratio
+        blended = np.clip(blended, floor, ceiling)
+    fractional = targeted_total * blended / np.sum(blended)
+    extra = np.floor(fractional).astype(int)
+    leftovers = targeted_total - int(np.sum(extra))
+    if leftovers:
+        order = np.argsort(-(fractional - extra))
+        extra[order[:leftovers]] += 1
+    return allocation + extra
 
 
 def run_tfim_qkrylov_adaptive_benchmark(
@@ -92,18 +180,20 @@ def run_tfim_qkrylov_adaptive_benchmark(
     total_shots: int = 100_000,
     minimum_shots: int = 100,
     pilot_fraction: float = 0.20,
+    adaptive_uniform_fraction: float = 0.50,
+    adaptive_overlap_weight: float = 0.50,
+    adaptive_max_weight_ratio: float = 4.0,
     seed: int = 7,
     noise: EffectiveNoiseParameters | None = None,
     calibration_relative_sigma: float = 0.10,
     overlap_safety_factor: float = 1.0,
     support_cap: int | None = None,
 ) -> KrylovBenchmarkResult:
-    """Run a mode-resolved, resource-accounted adaptive QK ablation.
+    """Run a resource-accounted and stability-guarded adaptive QK ablation.
 
-    The adaptive policy spends ``pilot_fraction`` of the *same* total shot
-    budget uniformly, derives an energy sensitivity from the pilot H/S pair,
-    and allocates only the remaining shots adaptively. Pilot counts are reused
-    in the final estimator, so no hidden measurement budget is introduced.
+    The pilot consumes part of the same fixed shot budget and its samples are
+    reused. Of the remaining budget, ``adaptive_uniform_fraction`` is reserved
+    uniformly and only the rest follows the guarded sensitivity score.
     """
 
     pilot_fraction = float(pilot_fraction)
@@ -122,44 +212,31 @@ def run_tfim_qkrylov_adaptive_benchmark(
     )
     raw_combined = combine_observable_impacts(raw_batches)
     sigma_mode = _calibration_covariance(raw_combined, calibration_relative_sigma)
-    calibration_combined = combine_observable_impacts(
-        raw_batches, mode_covariance=sigma_mode
-    )
-    calibration_model = build_krylov_error_model(
-        calibration_combined,
-        tuple(estimator.spec for estimator in plan.estimators),
-        plan.dimension,
-    )
+    calibration_combined = combine_observable_impacts(raw_batches, mode_covariance=sigma_mode)
     specs = tuple(estimator.spec for estimator in plan.estimators)
+    calibration_model = build_krylov_error_model(
+        calibration_combined, specs, plan.dimension
+    )
 
     first_order_residual = calibration_combined.predicted - finite_values
     first_order_rmse = float(np.sqrt(np.mean(first_order_residual**2)))
     first_order_max = float(np.max(np.abs(first_order_residual), initial=0.0))
     per_shot_variances = np.maximum(
-        1.0 - np.clip(finite_values, -1.0, 1.0) ** 2,
-        1e-12,
+        1.0 - np.clip(finite_values, -1.0, 1.0) ** 2, 1e-12
     )
-    uniform = _uniform_allocation(
-        len(plan.estimators), total_shots, minimum_shots
-    )
+    uniform = _uniform_allocation(len(plan.estimators), total_shots, minimum_shots)
     uniform_cov = np.diag(per_shot_variances / uniform)
     uniform_combined = combine_observable_impacts(
-        raw_batches,
-        mode_covariance=sigma_mode,
-        shot_covariance=uniform_cov,
+        raw_batches, mode_covariance=sigma_mode, shot_covariance=uniform_cov
     )
-    uniform_model = build_krylov_error_model(
-        uniform_combined, specs, plan.dimension
-    )
+    uniform_model = build_krylov_error_model(uniform_combined, specs, plan.dimension)
 
     rng = np.random.default_rng(seed)
     uniform_values = sample_pm1_expectations(finite_values, uniform, rng)
     raw_h, raw_s = assemble_krylov_matrices(
         _values_by_name(plan, uniform_values), specs, plan.dimension
     )
-    corrected_h, corrected_s = debias_krylov_matrices(
-        raw_h, raw_s, uniform_model
-    )
+    corrected_h, corrected_s = debias_krylov_matrices(raw_h, raw_s, uniform_model)
 
     policies: list[PolicyResult] = [
         PolicyResult(
@@ -175,47 +252,28 @@ def run_tfim_qkrylov_adaptive_benchmark(
     ]
     try:
         raw_result, raw_assessment = solve_noise_aware_krylov(
-            raw_h,
-            raw_s,
-            uniform_model,
+            raw_h, raw_s, uniform_model,
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=True,
         )
-        policies.append(
-            _policy(
-                "noise_modewise",
-                raw_result,
-                plan,
-                uniform,
-                float(np.max(raw_assessment.thresholds[raw_assessment.keep], initial=1e-12)),
-            )
-        )
+        policies.append(_policy(
+            "noise_modewise", raw_result, plan, uniform,
+            float(np.max(raw_assessment.thresholds[raw_assessment.keep], initial=1e-12)),
+        ))
     except ValueError:
         pass
     try:
         corrected_result, corrected_assessment = solve_noise_aware_krylov(
-            corrected_h,
-            corrected_s,
-            uniform_model,
+            corrected_h, corrected_s, uniform_model,
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=False,
         )
-        policies.append(
-            _policy(
-                "debiased_modewise",
-                corrected_result,
-                plan,
-                uniform,
-                float(
-                    np.max(
-                        corrected_assessment.thresholds[corrected_assessment.keep],
-                        initial=1e-12,
-                    )
-                ),
-            )
-        )
+        policies.append(_policy(
+            "debiased_modewise", corrected_result, plan, uniform,
+            float(np.max(corrected_assessment.thresholds[corrected_assessment.keep], initial=1e-12)),
+        ))
     except ValueError:
         corrected_result = None
 
@@ -231,89 +289,63 @@ def run_tfim_qkrylov_adaptive_benchmark(
     )
     pilot_cov = np.diag(per_shot_variances / pilot)
     pilot_combined = combine_observable_impacts(
-        raw_batches,
-        mode_covariance=sigma_mode,
-        shot_covariance=pilot_cov,
+        raw_batches, mode_covariance=sigma_mode, shot_covariance=pilot_cov
     )
     pilot_model = build_krylov_error_model(pilot_combined, specs, plan.dimension)
     pilot_h, pilot_s = debias_krylov_matrices(pilot_h, pilot_s, pilot_model)
 
     try:
         pilot_eigen, _ = solve_noise_aware_krylov(
-            pilot_h,
-            pilot_s,
-            pilot_model,
+            pilot_h, pilot_s, pilot_model,
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=False,
         )
-        sensitivities = _energy_observable_sensitivities(
-            pilot_eigen, calibration_model
-        )
+        sensitivity_model = calibration_model
     except ValueError:
-        # Fallback is deterministic and only controls allocation; no extra
-        # measurement data are consumed.
-        ideal_eigen, _ = solve_noise_aware_krylov(
-            plan.ideal_h,
-            plan.ideal_s,
-            calibration_model,
+        pilot_eigen, _ = solve_noise_aware_krylov(
+            plan.ideal_h, plan.ideal_s, calibration_model,
             safety_factor=0.0,
             absolute_floor=1e-12,
             include_predicted_bias=False,
         )
-        sensitivities = _energy_observable_sensitivities(
-            ideal_eigen, calibration_model
-        )
+        pilot_s = plan.ideal_s
+        sensitivity_model = calibration_model
 
-    additional = optimal_shot_allocation(
-        sensitivities,
+    energy_scores = _energy_observable_sensitivities(pilot_eigen, sensitivity_model)
+    overlap_scores = _overlap_stability_scores(pilot_s, sensitivity_model)
+    additional = guarded_shot_allocation(
+        energy_scores,
+        overlap_scores,
         per_shot_variances,
         remaining,
-        minimum_shots=0,
+        uniform_fraction=adaptive_uniform_fraction,
+        overlap_weight=adaptive_overlap_weight,
+        max_weight_ratio=adaptive_max_weight_ratio,
     )
     adaptive = pilot + additional
     additional_values = _sample_additional(finite_values, additional, rng)
-    final_values = (
-        pilot * pilot_values + additional * additional_values
-    ) / adaptive
+    final_values = (pilot * pilot_values + additional * additional_values) / adaptive
     adaptive_h, adaptive_s = assemble_krylov_matrices(
         _values_by_name(plan, final_values), specs, plan.dimension
     )
     adaptive_cov = np.diag(per_shot_variances / adaptive)
     adaptive_combined = combine_observable_impacts(
-        raw_batches,
-        mode_covariance=sigma_mode,
-        shot_covariance=adaptive_cov,
+        raw_batches, mode_covariance=sigma_mode, shot_covariance=adaptive_cov
     )
-    adaptive_model = build_krylov_error_model(
-        adaptive_combined, specs, plan.dimension
-    )
-    adaptive_h, adaptive_s = debias_krylov_matrices(
-        adaptive_h, adaptive_s, adaptive_model
-    )
+    adaptive_model = build_krylov_error_model(adaptive_combined, specs, plan.dimension)
+    adaptive_h, adaptive_s = debias_krylov_matrices(adaptive_h, adaptive_s, adaptive_model)
     try:
         adaptive_result, adaptive_assessment = solve_noise_aware_krylov(
-            adaptive_h,
-            adaptive_s,
-            adaptive_model,
+            adaptive_h, adaptive_s, adaptive_model,
             safety_factor=overlap_safety_factor,
             absolute_floor=1e-12,
             include_predicted_bias=False,
         )
-        policies.append(
-            _policy(
-                "adaptive_modewise",
-                adaptive_result,
-                plan,
-                adaptive,
-                float(
-                    np.max(
-                        adaptive_assessment.thresholds[adaptive_assessment.keep],
-                        initial=1e-12,
-                    )
-                ),
-            )
-        )
+        policies.append(_policy(
+            "adaptive_guarded", adaptive_result, plan, adaptive,
+            float(np.max(adaptive_assessment.thresholds[adaptive_assessment.keep], initial=1e-12)),
+        ))
     except ValueError:
         pass
 
